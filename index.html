@@ -135,18 +135,42 @@ async function generateTeam(gen, onlyFullyEvolved) {
     speciesList = speciesList.filter(s => fullyEvolvedMap[s.name]);
   }
 
-  // Shuffle species
-  speciesList.sort(() => Math.random() - 0.5);
+  // Shuffle the list once
+  speciesList = speciesList.sort(() => Math.random() - 0.5);
 
-  // Fetch pokemon data in parallel but limit concurrency to avoid API overload
-  // We'll implement a simple concurrency limiter:
-  const limit = 10;
+  // If filtering fully evolved, proceed as before:
+  if (onlyFullyEvolved) {
+    // Limit concurrency for fully evolved case:
+    const limit = 10;
+    let team = [];
+    for (let i = 0; i < speciesList.length && team.length < 6; i += limit) {
+      const batch = speciesList.slice(i, i + limit);
+      const datas = await Promise.all(batch.map(s => getPokemonData(s.name)));
+      for (const data of datas) {
+        if (!data) continue;
+        const moves = pickRandom(data.moves, 4);
+        const ability = pickRandom(data.abilities, 1)[0];
+        team.push({
+          name: capitalize(data.name),
+          moves,
+          ability,
+        });
+        if (team.length >= 6) break;
+      }
+    }
+    return team;
+  }
+
+  // If NOT filtering fully evolved, optimize by only fetching data for a random subset:
+  const sampleSize = Math.min(speciesList.length, 40); // try max 40 to limit calls
+  const sample = speciesList.slice(0, sampleSize);
+
+  // Fetch data in parallel (batch size 10)
+  const batchSize = 10;
   let team = [];
-  for (let i = 0; i < speciesList.length && team.length < 6; i += limit) {
-    const batch = speciesList.slice(i, i + limit);
-    const datas = await Promise.all(
-      batch.map(s => getPokemonData(s.name))
-    );
+  for (let i = 0; i < sample.length && team.length < 6; i += batchSize) {
+    const batch = sample.slice(i, i + batchSize);
+    const datas = await Promise.all(batch.map(s => getPokemonData(s.name)));
     for (const data of datas) {
       if (!data) continue;
       const moves = pickRandom(data.moves, 4);
@@ -154,14 +178,19 @@ async function generateTeam(gen, onlyFullyEvolved) {
       team.push({
         name: capitalize(data.name),
         moves,
-        ability
+        ability,
       });
       if (team.length >= 6) break;
     }
   }
 
+  if (team.length < 6) {
+    throw new Error('Not enough Pokémon to generate a full team');
+  }
+
   return team;
 }
+
 
 
 function capitalize(s) {
