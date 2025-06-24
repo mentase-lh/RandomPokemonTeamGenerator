@@ -23,6 +23,17 @@
   Only fully evolved Pokémon
 </label>
 
+<label>
+  <input id="randomizeEVs" type="checkbox" />
+  Randomize EVs
+</label>
+
+<label>
+  <input id="randomizeItems" type="checkbox" />
+  Randomize Held Items
+</label>
+
+
 <button id="generateBtn">Generate Team</button>
 <button id="exportBtn" style="display:none;">Export Showdown Format</button>
 
@@ -116,56 +127,41 @@ async function fetchEvolutionChains(speciesList) {
   });
 
   // Return a map: species name => boolean if fully evolved
-  const fullyEvolvedMap = {};
+  const evoInfoMap = {}; // { speciesName: { isFinal: bool, hasEvolutions: bool } }
+
   for (const s of speciesList) {
     const evoUrl = speciesToEvoUrl[s.name];
-    fullyEvolvedMap[s.name] = evoChainMap.get(evoUrl).includes(s.name);
-  }
-  return fullyEvolvedMap;
+    const finalForms = evoChainMap.get(evoUrl);
+    const isFinal = finalForms.includes(s.name);
+    const hasEvolutions = finalForms.length > 0 && !isFinal;
+    evoInfoMap[s.name] = {
+      isFinal,
+      hasEvolutions
+  };
+}
+
+  return evoInfoMap;
 }
 
 // Modified generateTeam to use this:
 
-async function generateTeam(gen, onlyFullyEvolved) {
+async function generateTeam(gen, onlyFullyEvolved, randomizeEVs, randomizeItems) {
   let speciesList = await getGenerationPokemon(gen);
 
-  let fullyEvolvedMap = null;
-  if (onlyFullyEvolved) {
-    fullyEvolvedMap = await fetchEvolutionChains(speciesList);
-    speciesList = speciesList.filter(s => fullyEvolvedMap[s.name]);
+  let evoInfoMap = null;
+  if (onlyFullyEvolved || randomizeItems) {
+    // Need this map for item legality too
+    evoInfoMap = await fetchEvolutionChains(speciesList);
+    if (onlyFullyEvolved) {
+      speciesList = speciesList.filter(s => evoInfoMap[s.name]);
+    }
   }
 
-  // Shuffle the list once
   speciesList = speciesList.sort(() => Math.random() - 0.5);
 
-  // If filtering fully evolved, proceed as before:
-  if (onlyFullyEvolved) {
-    // Limit concurrency for fully evolved case:
-    const limit = 10;
-    let team = [];
-    for (let i = 0; i < speciesList.length && team.length < 6; i += limit) {
-      const batch = speciesList.slice(i, i + limit);
-      const datas = await Promise.all(batch.map(s => getPokemonData(s.name)));
-      for (const data of datas) {
-        if (!data) continue;
-        const moves = pickRandom(data.moves, 4);
-        const ability = pickRandom(data.abilities, 1)[0];
-        team.push({
-          name: capitalize(data.name),
-          moves,
-          ability,
-        });
-        if (team.length >= 6) break;
-      }
-    }
-    return team;
-  }
-
-  // If NOT filtering fully evolved, optimize by only fetching data for a random subset:
-  const sampleSize = Math.min(speciesList.length, 40); // try max 40 to limit calls
+  const sampleSize = Math.min(speciesList.length, 40);
   const sample = speciesList.slice(0, sampleSize);
 
-  // Fetch data in parallel (batch size 10)
   const batchSize = 10;
   let team = [];
   for (let i = 0; i < sample.length && team.length < 6; i += batchSize) {
@@ -175,11 +171,24 @@ async function generateTeam(gen, onlyFullyEvolved) {
       if (!data) continue;
       const moves = pickRandom(data.moves, 4);
       const ability = pickRandom(data.abilities, 1)[0];
+      const speciesName = data.name.toLowerCase();
+      const evoInfo = evoInfoMap ? evoInfoMap[speciesName] : { isFinal: false, hasEvolutions: true };
+      const isFullyEvolved = evoInfo.isFinal;
+      const canEvolve = evoInfo.hasEvolutions;
+      const item = randomizeItems ? randomItem(isFullyEvolved, canEvolve) : '[Item]';
+
+
+
+
       team.push({
         name: capitalize(data.name),
         moves,
         ability,
+        evs: randomizeEVs ? randomEVSpread() : '252 Atk / 252 Spe / 4 HP',
+        nature: randomizeEVs ? randomNature() : 'Adamant',
+        item: randomizeItems ? randomItem(!isFullyEvolved) : '[Item]'
       });
+
       if (team.length >= 6) break;
     }
   }
@@ -193,21 +202,69 @@ async function generateTeam(gen, onlyFullyEvolved) {
 
 
 
+
 function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function randomEVSpread() {
+  const stats = ['HP', 'Atk', 'Def', 'SpA', 'SpD', 'Spe'];
+  const evs = {};
+  let remaining = 508;
+
+  stats.forEach(stat => evs[stat] = 0);
+
+  while (remaining > 0) {
+    const stat = stats[Math.floor(Math.random() * stats.length)];
+    const add = Math.min(remaining, Math.floor(Math.random() * 64));
+    if (evs[stat] + add <= 252) {
+      evs[stat] += add;
+      remaining -= add;
+    }
+  }
+
+  return stats.filter(s => evs[s] > 0).map(s => `${evs[s]} ${s}`).join(' / ');
+}
+
+function randomNature() {
+  const natures = [
+    'Adamant', 'Modest', 'Jolly', 'Timid', 'Brave', 'Calm', 'Impish', 'Bold',
+    'Careful', 'Hardy', 'Hasty', 'Lonely', 'Mild', 'Naive', 'Quiet', 'Rash',
+    'Relaxed', 'Sassy', 'Serious', 'Docile', 'Lax', 'Gentle', 'Bashful', 'Quirky', 'Naughty'
+  ];
+  return natures[Math.floor(Math.random() * natures.length)];
+}
+
+function randomItem(isFullyEvolved, canEvolve) {
+  const items = [
+    'Leftovers', 'Choice Band', 'Choice Specs', 'Life Orb',
+    'Focus Sash', 'Assault Vest', 'Rocky Helmet',
+    'Sitrus Berry', 'Expert Belt', 'Air Balloon',
+    'Black Sludge', 'Choice Scarf', 'Lum Berry', 'Light Clay',
+    'Eviolite'
+  ];
+
+  const legalItems = (!isFullyEvolved && canEvolve)
+    ? items
+    : items.filter(i => i !== 'Eviolite');
+
+  return legalItems[Math.floor(Math.random() * legalItems.length)];
+}
+
+
+
+
 function showdownFormat(team) {
   return team.map(poke => {
-    return `${poke.name} @ [Item]
+    return `${poke.name} @ ${poke.item}
 Ability: ${capitalize(poke.ability)}
 Level: 100
-EVs: 252 Atk / 252 Spe / 4 HP
-Nature: Adamant
-- ${poke.moves.map(capitalize).join('\n- ')}
-`;
-  }).join('\n');
+EVs: ${poke.evs}
+Nature: ${poke.nature}
+- ${poke.moves.map(capitalize).join('\n- ')}`;
+  }).join('\n\n');
 }
+
 
 const output = document.getElementById('output');
 const generateBtn = document.getElementById('generateBtn');
@@ -222,9 +279,11 @@ generateBtn.onclick = async () => {
 
   const gen = parseInt(document.getElementById('generation').value);
   const onlyFullyEvolved = document.getElementById('fullyEvolved').checked;
+  const randomizeEVs = document.getElementById('randomizeEVs').checked;
+  const randomizeItems = document.getElementById('randomizeItems').checked;
 
   try {
-    const team = await generateTeam(gen, onlyFullyEvolved);
+    const team = await generateTeam(gen, onlyFullyEvolved, randomizeEVs, randomizeItems);
     if (team.length < 6) {
       output.textContent = 'Could not generate full team (not enough Pokémon matching criteria).';
       return;
@@ -232,8 +291,9 @@ generateBtn.onclick = async () => {
     currentTeam = team;
     let displayText = '';
     team.forEach((poke, idx) => {
-      displayText += `${idx + 1}. ${poke.name}\nAbility: ${poke.ability}\nMoves: ${poke.moves.join(', ')}\n\n`;
+      displayText += `${idx + 1}. ${poke.name}\nItem: ${poke.item}\nAbility: ${poke.ability}\nEVs: ${poke.evs}\nNature: ${poke.nature}\nMoves: ${poke.moves.join(', ')}\n\n`;
     });
+
     output.textContent = displayText;
     exportBtn.style.display = 'inline-block';
   } catch (err) {
