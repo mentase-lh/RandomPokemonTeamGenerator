@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pokémon Team Generator</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 0 10px; }
+  label { display: block; margin: 10px 0 5px; }
+  button { margin-top: 15px; padding: 8px 12px; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; margin-top: 10px; }
+</style>
+</head>
+<body>
+<h1>Pokémon Team Generator</h1>
+
+<label>Generation (1-9):
+  <input id="generation" type="number" min="1" max="9" value="1" />
+</label>
+
+<label>
+  <input id="fullyEvolved" type="checkbox" />
+  Only fully evolved Pokémon
+</label>
+
+<button id="generateBtn">Generate Team</button>
+<button id="exportBtn" style="display:none;">Export Showdown Format</button>
+
+<pre id="output"></pre>
+
+<script>
+const pokeApiBase = 'https://pokeapi.co/api/v2';
+
+async function fetchJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function getGenerationPokemon(gen) {
+  const data = await fetchJson(`${pokeApiBase}/generation/${gen}`);
+  return data.pokemon_species.map(species => ({
+    name: species.name,
+    url: species.url,
+  }));
+}
+
+function pickRandom(arr, n) {
+  const result = [];
+  const copy = [...arr];
+  const limit = Math.min(n, copy.length);
+  for (let i = 0; i < limit; i++) {
+    const idx = Math.floor(Math.random() * copy.length);
+    result.push(copy[idx]);
+    copy.splice(idx, 1);
+  }
+  return result;
+}
+
+async function getPokemonData(name) {
+  try {
+    const data = await fetchJson(`${pokeApiBase}/pokemon/${name}`);
+    return {
+      name: data.name,
+      moves: data.moves.map(m => m.move.name),
+      abilities: data.abilities.map(a => a.ability.name),
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch data for ${name}: ${err.message}`);
+    return null;
+  }
+}
+
+function getFinalEvolutions(chain) {
+  // Recursive function to find all final species names in the evolution chain
+  if (!chain.evolves_to || chain.evolves_to.length === 0) {
+    return [chain.species.name];
+  }
+  let finals = [];
+  for (const evo of chain.evolves_to) {
+    finals = finals.concat(getFinalEvolutions(evo));
+  }
+  return finals;
+}
+
+
+async function fetchEvolutionChains(speciesList) {
+  // Map from evo chain url to array of species names that are final evolutions
+  const evoChainMap = new Map();
+
+  // Get all unique evolution_chain urls
+  const evoUrls = new Set();
+  const speciesToEvoUrl = {};
+
+  // Fetch species data in parallel
+  const speciesDataArr = await Promise.all(
+    speciesList.map(s => fetchJson(`${pokeApiBase}/pokemon-species/${s.name}`))
+  );
+
+  speciesDataArr.forEach(speciesData => {
+    const evoUrl = speciesData.evolution_chain.url;
+    evoUrls.add(evoUrl);
+    speciesToEvoUrl[speciesData.name] = evoUrl;
+  });
+
+  // Fetch all evolution chains in parallel
+  const evoChains = await Promise.all(
+    [...evoUrls].map(url => fetchJson(url))
+  );
+
+  // Parse all final evolutions
+  evoChains.forEach((chainData, i) => {
+    const url = [...evoUrls][i];
+    const finals = getFinalEvolutions(chainData.chain);
+    evoChainMap.set(url, finals);
+  });
+
+  // Return a map: species name => boolean if fully evolved
+  const fullyEvolvedMap = {};
+  for (const s of speciesList) {
+    const evoUrl = speciesToEvoUrl[s.name];
+    fullyEvolvedMap[s.name] = evoChainMap.get(evoUrl).includes(s.name);
+  }
+  return fullyEvolvedMap;
+}
+
+// Modified generateTeam to use this:
+
+async function generateTeam(gen, onlyFullyEvolved) {
+  let speciesList = await getGenerationPokemon(gen);
+
+  let fullyEvolvedMap = null;
+  if (onlyFullyEvolved) {
+    fullyEvolvedMap = await fetchEvolutionChains(speciesList);
+    speciesList = speciesList.filter(s => fullyEvolvedMap[s.name]);
+  }
+
+  // Shuffle species
+  speciesList.sort(() => Math.random() - 0.5);
+
+  // Fetch pokemon data in parallel but limit concurrency to avoid API overload
+  // We'll implement a simple concurrency limiter:
+  const limit = 10;
+  let team = [];
+  for (let i = 0; i < speciesList.length && team.length < 6; i += limit) {
+    const batch = speciesList.slice(i, i + limit);
+    const datas = await Promise.all(
+      batch.map(s => getPokemonData(s.name))
+    );
+    for (const data of datas) {
+      if (!data) continue;
+      const moves = pickRandom(data.moves, 4);
+      const ability = pickRandom(data.abilities, 1)[0];
+      team.push({
+        name: capitalize(data.name),
+        moves,
+        ability
+      });
+      if (team.length >= 6) break;
+    }
+  }
+
+  return team;
+}
+
+
+function capitalize(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function showdownFormat(team) {
+  return team.map(poke => {
+    return `${poke.name} @ [Item]
+Ability: ${capitalize(poke.ability)}
+Level: 100
+EVs: 252 Atk / 252 Spe / 4 HP
+Nature: Adamant
+- ${poke.moves.map(capitalize).join('\n- ')}
+`;
+  }).join('\n');
+}
+
+const output = document.getElementById('output');
+const generateBtn = document.getElementById('generateBtn');
+const exportBtn = document.getElementById('exportBtn');
+
+let currentTeam = null;
+
+generateBtn.onclick = async () => {
+  output.textContent = 'Generating team, please wait...';
+  exportBtn.style.display = 'none';
+  currentTeam = null;
+
+  const gen = parseInt(document.getElementById('generation').value);
+  const onlyFullyEvolved = document.getElementById('fullyEvolved').checked;
+
+  try {
+    const team = await generateTeam(gen, onlyFullyEvolved);
+    if (team.length < 6) {
+      output.textContent = 'Could not generate full team (not enough Pokémon matching criteria).';
+      return;
+    }
+    currentTeam = team;
+    let displayText = '';
+    team.forEach((poke, idx) => {
+      displayText += `${idx + 1}. ${poke.name}\nAbility: ${poke.ability}\nMoves: ${poke.moves.join(', ')}\n\n`;
+    });
+    output.textContent = displayText;
+    exportBtn.style.display = 'inline-block';
+  } catch (err) {
+    output.textContent = 'Error: ' + err.message;
+  }
+};
+
+exportBtn.onclick = () => {
+  if (!currentTeam) return;
+  const text = showdownFormat(currentTeam);
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'pokemon_team.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+};
+</script>
+</body>
+</html>
