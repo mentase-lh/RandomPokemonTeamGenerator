@@ -881,6 +881,18 @@ const itemPoolByGen = {
   "Zoom Lens"]
 }
 
+const genToVersionGroups = {
+  1: ['red-blue', 'yellow'],
+  2: ['gold-silver', 'crystal'],
+  3: ['ruby-sapphire', 'emerald', 'fire-red-leaf-green'],
+  4: ['diamond-pearl', 'platinum', 'heartgold-soulsilver'],
+  5: ['black-white', 'black-2-white-2'],
+  6: ['x-y', 'omega-ruby-alpha-sapphire'],
+  7: ['sun-moon', 'ultra-sun-ultra-moon'],
+  8: ['sword-shield'],
+  9: ['scarlet-violet']
+};
+
 
 async function fetchJson(url) {
   const res = await fetch(url);
@@ -910,13 +922,31 @@ function pickRandom(arr, n) {
   return result;
 }
 
-async function getPokemonData(name) {
+async function getPokemonData(name, gen) {
   try {
     const data = await fetchJson(`${pokeApiBase}/pokemon/${name}`);
+    
+    const allowedVersionGroups = genToVersionGroups[gen] || [];
+
+    // Filter moves to only those available in allowed version groups
+    const filteredMoves = data.moves.filter(moveEntry => {
+      // moveEntry.version_group_details is an array describing which version groups this move is learnable in
+      return moveEntry.version_group_details.some(vgd =>
+        allowedVersionGroups.includes(vgd.version_group.name)
+      );
+    }).map(m => m.move.name);
+
+    // For abilities, filtering by gen introduced is still okay:
+    const filteredAbilities = [];
+    for (const abilityEntry of data.abilities) {
+      const abilityGen = await getAbilityGen(abilityEntry.ability.name);
+      if (abilityGen <= gen) filteredAbilities.push(abilityEntry.ability.name);
+    }
+
     return {
       name: data.name,
-      moves: data.moves.map(m => m.move.name),
-      abilities: data.abilities.map(a => a.ability.name),
+      moves: filteredMoves,
+      abilities: filteredAbilities,
     };
   } catch (err) {
     console.warn(`Failed to fetch data for ${name}: ${err.message}`);
@@ -1008,7 +1038,7 @@ async function generateTeam(gen, onlyFullyEvolved, randomizeEVs, randomizeItems)
   let team = [];
   for (let i = 0; i < sample.length && team.length < 6; i += batchSize) {
     const batch = sample.slice(i, i + batchSize);
-    const datas = await Promise.all(batch.map(s => getPokemonData(s.name)));
+    const datas = await Promise.all(batch.map(s => getPokemonData(s.name, gen)));
     for (const data of datas) {
       if (!data) continue;
       const moves = pickRandom(data.moves, 4);
@@ -1048,6 +1078,50 @@ async function generateTeam(gen, onlyFullyEvolved, randomizeEVs, randomizeItems)
 function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+const genCache = {
+  moves: new Map(),     // moveName -> genNumber
+  abilities: new Map(), // abilityName -> genNumber
+};
+
+async function getMoveGen(moveName) {
+  if (genCache.moves.has(moveName)) return genCache.moves.get(moveName);
+  const data = await fetchJson(`${pokeApiBase}/move/${moveName}`);
+  // The generation URL is like "/api/v2/generation/3/"
+  const genUrl = data.generation.url;
+  const genNum = parseInt(genUrl.match(/generation\/(\d+)\//)[1]);
+  genCache.moves.set(moveName, genNum);
+  return genNum;
+}
+
+async function getAbilityGen(abilityName) {
+  if (genCache.abilities.has(abilityName)) return genCache.abilities.get(abilityName);
+  const data = await fetchJson(`${pokeApiBase}/ability/${abilityName}`);
+  const genUrl = data.generation.url;
+  const genNum = parseInt(genUrl.match(/generation\/(\d+)\//)[1]);
+  genCache.abilities.set(abilityName, genNum);
+  return genNum;
+}
+
+async function filterMovesAbilitiesByGen(moves, abilities, gen) {
+  // Filter moves
+  const filteredMoves = [];
+  for (const moveName of moves) {
+    const moveGen = await getMoveGen(moveName);
+    if (moveGen <= gen) filteredMoves.push(moveName);
+  }
+  
+  // Filter abilities
+  const filteredAbilities = [];
+  for (const abilityName of abilities) {
+    const abilityGen = await getAbilityGen(abilityName);
+    if (abilityGen <= gen) filteredAbilities.push(abilityName);
+  }
+  
+  return { moves: filteredMoves, abilities: filteredAbilities };
+}
+
+
 
 function randomEVSpread() {
   const stats = ['HP', 'Atk', 'Def', 'SpA', 'SpD', 'Spe'];
