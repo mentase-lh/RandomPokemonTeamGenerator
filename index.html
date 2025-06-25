@@ -1064,7 +1064,9 @@ async function generateTeam(gen, onlyFullyEvolved, randomizeEVs, randomizeItems)
     for (const data of datas) {
       if (!data) continue;
       const moves = pickRandom(data.moves, 4);
-      const ability = pickRandom(data.abilities, 1)[0];
+      const ability = gen >= 3 && data.abilities.length > 0
+        ? pickRandom(data.abilities, 1)[0]
+        : '';
       const speciesName = data.name.toLowerCase();
       const evoInfo = evoInfoMap ? evoInfoMap[speciesName] : { isFinal: false, hasEvolutions: true };
       const isFullyEvolved = evoInfo.isFinal;
@@ -1219,6 +1221,10 @@ generateBtn.onclick = async () => {
   const randomizeItems = document.getElementById('randomizeItems').checked;
 
   try {
+    if (gen > 9 || gen < 1) {
+      output.textContent = 'Please enter a generation between 1 and 9.'
+      return;
+    }
     const team = await generateTeam(gen, onlyFullyEvolved, randomizeEVs, randomizeItems);
     if (team.length < 6) {
       output.textContent = 'Could not generate full team (not enough Pokémon matching criteria).';
