@@ -153,7 +153,7 @@ async function generateTeam(gen, onlyFullyEvolved, randomizeEVs, randomizeItems)
     // Need this map for item legality too
     evoInfoMap = await fetchEvolutionChains(speciesList);
     if (onlyFullyEvolved) {
-      speciesList = speciesList.filter(s => evoInfoMap[s.name]);
+      speciesList = speciesList.filter(s => evoInfoMap[s.name]?.isFinal);
     }
   }
 
