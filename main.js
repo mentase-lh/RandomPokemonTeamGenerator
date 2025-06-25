@@ -370,7 +370,7 @@ const exportBtn = document.getElementById('exportBtn');
 let currentTeam = null;
 
 window.onload = () => {
-  output.textContent = 'Please note that the first generation you select may take a while to load. Subsequent generations will be faster.';
+  output.textContent = 'Please note that the first team generation you select may take a while to load. Subsequent team generations will be faster.';
 }
 
 generateBtn.onclick = async () => {
