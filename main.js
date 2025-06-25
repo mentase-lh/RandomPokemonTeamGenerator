@@ -14,6 +14,7 @@ const genToVersionGroups = {
   9: ['scarlet-violet']
 };
 
+const legalPokemonCache = new Map();
 
 async function fetchJson(url) {
   const res = await fetch(url);
@@ -21,12 +22,71 @@ async function fetchJson(url) {
   return res.json();
 }
 
+const versionGroupCheckCache = new Map();
+
+async function isPokemonInVersionGroupCached(pokemonName, allowedVersionGroups) {
+  const cacheKey = `${pokemonName}|${allowedVersionGroups.join(',')}`;
+  if (versionGroupCheckCache.has(cacheKey)) {
+    return versionGroupCheckCache.get(cacheKey);
+  }
+
+  try {
+    const speciesData = await fetchJson(`${pokeApiBase}/pokemon-species/${pokemonName}`);
+
+    const encounterUrls = speciesData.varieties.map(v => v.pokemon.url);
+
+    for (const url of encounterUrls) {
+      const data = await fetchJson(url);
+      for (const move of data.moves) {
+        for (const detail of move.version_group_details) {
+          if (allowedVersionGroups.includes(detail.version_group.name)) {
+            versionGroupCheckCache.set(cacheKey, true);
+            return true;
+          }
+        }
+      }
+    }
+
+    versionGroupCheckCache.set(cacheKey, false);
+    return false;
+  } catch (err) {
+    console.warn(`Failed version group check for ${pokemonName}: ${err.message}`);
+    versionGroupCheckCache.set(cacheKey, false);
+    return false;
+  }
+}
+
+
 async function getGenerationPokemon(gen) {
-  const data = await fetchJson(`${pokeApiBase}/generation/${gen}`);
-  return data.pokemon_species.map(species => ({
-    name: species.name,
-    url: species.url,
-  }));
+  if (legalPokemonCache.has(gen)) {
+    return legalPokemonCache.get(gen);
+  }
+
+  const allowedVersionGroups = genToVersionGroups[gen];
+  if (!allowedVersionGroups || allowedVersionGroups.length === 0) {
+    throw new Error(`No version groups mapped for generation ${gen}`);
+  }
+
+  const allPokemonList = await fetchJson(`${pokeApiBase}/pokemon?limit=1300`);
+  const names = allPokemonList.results.map(p => p.name);
+
+  const filtered = [];
+
+  const concurrencyLimit = 10;
+  for (let i = 0; i < names.length; i += concurrencyLimit) {
+    const chunk = names.slice(i, i + concurrencyLimit);
+    const checks = await Promise.all(
+      chunk.map(name => isPokemonInVersionGroupCached(name, allowedVersionGroups))
+    );
+    for (let j = 0; j < checks.length; j++) {
+      if (checks[j]) {
+        filtered.push({ name: chunk[j], url: `${pokeApiBase}/pokemon/${chunk[j]}` });
+      }
+    }
+  }
+
+  legalPokemonCache.set(gen, filtered);
+  return filtered;
 }
 
 
