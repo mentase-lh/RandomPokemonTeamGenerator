@@ -1,0 +1,25 @@
+
+  body { font-family: Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 0 10px; }
+  label { display: block; margin: 10px 0 5px; }
+  button { margin-top: 15px; padding: 8px 12px; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; margin-top: 10px; }
+
+  #site-footer {
+    position: fixed;
+    bottom: 5px;
+    width: 100%;
+    text-align: center;
+    font-size: 1.2rem;
+    color: #666;
+    font-family: Arial, sans-serif;
+    user-select: none;
+  }
+
+  #site-footer a {
+    color: #666;
+    text-decoration: none;
+  }
+
+  #site-footer a:hover {
+    text-decoration: underline;
+  }
